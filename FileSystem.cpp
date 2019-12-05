@@ -96,6 +96,7 @@ bool find_run_command(vector<string> command_vec){
     else if(command.compare("C")==0){
         if(is_mounted){
             fs_create( command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            return 1;
         }
         else{
            fprintf(stderr,"Error: No file system is mounted");
@@ -106,9 +107,21 @@ bool find_run_command(vector<string> command_vec){
     else if(command.compare("D")==0){
         if(is_mounted){
             fs_delete(command_vec.at(1));
+            return 1;
         }
         else{
            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("R")==0){
+        if(is_mounted){
+            fs_read(command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            return 1;
+        }
+        else{
+        fprintf(stderr,"Error: No file system is mounted");
         }
         //let ta know u changed the parameter for this
         //fs_create()
@@ -587,135 +600,7 @@ void fs_create(string name, int size){
     }
 
 }
-//assumes that the name is a file
-void delete_file(string name){
-    int first_available_inode = -1;
-    //at this point, we can assume no dupes in a directory on disk. make hash of all directories
-    /*Comments op map: the parent index is the entire dir_parent in the inode
-    */
-    multimap<string,uint8_t> hash_table;  //multimap<inode_name,parent_index>
-    typedef std::multimap<string, uint8_t>::iterator MMAPIterator;
-    for(int i =0;i<126;i++){
-        string str_inode_name;
-        for(int k=0;k<5;k++){
-            string s(1,real_Super_block.inode[i].name[k]);
-            str_inode_name = str_inode_name+ s;
-        }
-        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
-        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
-        bitset<8> busedsize(inode_used_size); //MSB indicates if active or not
-        if(busedsize[7]==1){
-            pair<MMAPIterator, MMAPIterator> result = hash_table.equal_range(str_inode_name);
-            hash_table.insert({str_inode_name,inode_dir_parent});
-        }
-        else{
-            if(first_available_inode<0){
-                first_available_inode = i;
-            }
-        }
 
-    }
-    //check if file/directory exists in the current directory, and obtain relevant info
-    int inode_index;
-    string file_dir_name;
-    uint8_t file_dir_used_size;
-    uint8_t file_dir_start_block;
-    uint8_t file_dir_dir_parent;
-    bool found_file_dir = 0;
-    pair<MMAPIterator, MMAPIterator> result = hash_table.equal_range(name);
-    for (MMAPIterator it = result.first; it != result.second; it++){
-        //std::cout << it->second << std::endl;
-        uint8_t hash_value = it->second;
-        uint8_t manipulate = 127;  //01111111
-        string hash_key = it->first;
-        if((hash_value&manipulate)==(current_working_dir&manipulate) && hash_key.compare(name)==0){
-            for(int j=0;j<126;j++){
-                string str_inode_name;
-                for(int k=0;k<5;k++){
-                    string s(1,real_Super_block.inode[j].name[k]);
-                    str_inode_name = str_inode_name+ s;
-                }
-                if(str_inode_name.compare(hash_key)==0 && hash_value==real_Super_block.inode[j].dir_parent){
-                    file_dir_name = hash_key;
-                    file_dir_used_size = real_Super_block.inode[j].used_size;
-                    file_dir_start_block = real_Super_block.inode[j].start_block;
-                    file_dir_dir_parent = real_Super_block.inode[j].dir_parent;
-                    inode_index = j;
-                    found_file_dir=1;
-                }
-            }
-            //fprintf(stderr,"Error: File or directory %s already exists",name.c_str());
-        }
-    }
-    if(!found_file_dir){
-        fprintf(stderr,"Error: File or directory %s does not exist",name.c_str());
-        return;
-    }
-    //now check if file or directory, and update disk accordingly
-    bitset<8> bdirparent(file_dir_dir_parent);
-    if(file_dir_start_block!=0){//indicates a file
-
-        //Now write to the actual disk. update free space, and the free inode
-        std::ifstream infile2(real_disk_name.c_str());
-        char temp_buffer2[131072];   //since we are rewriting superblock in disk, create a buffer
-        infile2.read(temp_buffer2, 131072);  //read disk and store it in buffer
-        infile2.close();
-
-        std:ofstream outfile;
-        outfile.open(real_disk_name.c_str());
-        string bit_str;
-        int bytelocation = 16 + inode_index*8; //the inodes starting byte in superblock
-        uint8_t temp127 = 127;
-        for(int i=0;i<16;i++){  //make the binary stream of free_block_list
-            bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
-        }
-        bitset<128> freebits(bit_str);  //update the bits for what is being deleted
-        for(int i=0;i<128;i++){
-            if((file_dir_start_block)<=i && i <= (file_dir_start_block+(file_dir_used_size&temp127)-1)){
-                freebits[127-i]= 0;
-            }
-        }
-        string free_space_str = freebits.to_string();
-        //begin deleting to structs
-        for(int i=0;i<5;i++){
-            real_Super_block.inode[inode_index].name[i]=='\0';
-        }
-        real_Super_block.inode[inode_index].used_size = 0;
-        real_Super_block.inode[inode_index].start_block = 0;
-        real_Super_block.inode[inode_index].dir_parent = 0;
-        for(int i=0;i<16;i++){
-            real_Super_block.free_block_list[i] = free_space_str.at(i);
-        }
-        //begin deleting to disk
-        char temp_buffer[1024];
-        for(int i=0;i<16;i++){
-            temp_buffer[i] = free_space_str.at(i);
-        }
-        //first write the free list on disk
-        streampos free_list_position = 0;
-        fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
-        myFile.seekp (free_list_position);
-        myFile.write (temp_buffer, 16);
-        //now update the inode in superblock on disk
-        for(int i=0;i<8;i++){
-            temp_buffer[i] = 0;
-        }
-        streampos disk_inode_position = 16 + inode_index*8;
-        myFile.seekp(disk_inode_position);
-        myFile.write(temp_buffer,8);
-        //now delete block data
-        streampos disk_block_position = file_dir_start_block*1024;
-        long total_size_bytes = (file_dir_start_block + (file_dir_used_size&temp127) -1);
-        char max_buffer[total_size_bytes];  //worst case, file takes 1024*127=130048 bytes
-        for(int i=0;i<total_size_bytes;i++){  //TODO:this loop might not be neccesary. check later
-            max_buffer[i] = '\0';
-        }
-        myFile.seekp(disk_block_position);
-        myFile.write(max_buffer,total_size_bytes);
-        return;
-    }
-    cout<<"This should not print"<<endl;
-}
 
 void fs_delete(std::string name){
     int first_available_inode = -1;
@@ -784,16 +669,7 @@ void fs_delete(std::string name){
     bitset<8> bdirparent(file_dir_dir_parent);
     if(file_dir_start_block!=0){//indicates a file
 
-        //Now write to the actual disk. update free space, and the free inode
-        std::ifstream infile2(real_disk_name.c_str());
-        char temp_buffer2[131072];   //since we are rewriting superblock in disk, create a buffer
-        infile2.read(temp_buffer2, 131072);  //read disk and store it in buffer
-        infile2.close();
-
-        std:ofstream outfile;
-        outfile.open(real_disk_name.c_str());
         string bit_str;
-        int bytelocation = 16 + inode_index*8; //the inodes starting byte in superblock
         uint8_t temp127 = 127;
         for(int i=0;i<16;i++){  //make the binary stream of free_block_list
             bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
@@ -841,15 +717,79 @@ void fs_delete(std::string name){
         }
         myFile.seekp(disk_block_position);
         myFile.write(max_buffer,total_size_bytes);
+        myFile.close();
         return;
     }
-    else{
-
+    else{  //this means name is a directory
+        //begin by finding everything inside this directory and deleting them
+        for(int i = 0; i<126;i++){
+            uint8_t recurse_parent = real_Super_block.inode[i].dir_parent;
+            uint8_t temp127 = 127;
+            if(recurse_parent&temp127 == file_dir_dir_parent&temp127){
+                string temp_name;
+                for(int k=0;k<5;k++){
+                    string s(1,real_Super_block.inode[i].name[k]);
+                    temp_name = temp_name+ s;
+                }
+                fs_delete(temp_name);  //could be file or directory 
+            }         
+        }
+        //begin deleting to structs
+        for(int i=0;i<5;i++){
+            real_Super_block.inode[inode_index].name[i]=='\0';
+        }
+        real_Super_block.inode[inode_index].used_size = 0;
+        real_Super_block.inode[inode_index].start_block = 0;
+        real_Super_block.inode[inode_index].dir_parent = 0;
+        //begin deleting inode superblock data from disk
+        char temp_buffer[1024];
+        fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+        for(int i=0;i<8;i++){
+            temp_buffer[i] = 0;
+        }
+        streampos disk_inode_position = 16 + inode_index*8;
+        myFile.seekp(disk_inode_position);
+        myFile.write(temp_buffer,8);
+        return;
     }
 
 
 }
-
+void fs_read(std::string name, int block_num){
+    uint8_t temp127 = 127;
+    int inode_index=-1;
+    for(int i=0;i<126;i++){
+        string temp_name;
+        for(int k=0;k<5;k++){
+            string s(1,real_Super_block.inode[i].name[k]);
+            temp_name = temp_name+ s;
+        }
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        bitset<8> busedsize(inode_used_size);
+        bitset<8> bdirparent(inode_dir_parent);
+        if(busedsize[7] == 1 && temp_name.compare(name)==0 && 
+        (inode_dir_parent&temp127) == (current_working_dir&temp127) && bdirparent[7]==0){
+            inode_index = i;
+        }
+    }
+    if(inode_index<0){
+        fprintf(stderr, "Error: File %s does not exist",name.c_str());
+        return;
+    }
+    int size = (int) real_Super_block.inode[inode_index].used_size;
+    if(0<=block_num && block_num<=(size-1)){
+        fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+        long block_position = block_num;
+        streampos disk_block_position = block_position*1024;
+        myFile.seekg(disk_block_position);
+        myFile.read(buffer,1024);
+        return;
+    }
+    else{
+       fprintf(stderr, "Error: %s does not have block %d",name.c_str(),block_num);
+    }
+}
 int main(int argc, char *argv[]) {
 
     
