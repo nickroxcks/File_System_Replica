@@ -28,6 +28,8 @@ vector<int> process_list;  //vector of all the child processes that have been cr
 string current_working_dir_OS;
 uint8_t current_working_dir;  //try to keep MSB to 0
 Super_block real_Super_block;
+uint8_t original_current_dir;
+bool recurse_flag =0;
 
 /**
  * @brief Tokenize a string 
@@ -102,7 +104,11 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("D")==0){
         if(is_mounted){
+            original_current_dir = current_working_dir;
             fs_delete(command_vec.at(1));
+            if(recurse_flag){
+                current_working_dir = original_current_dir;
+            }
             return 1;
         }
         else{
@@ -149,7 +155,7 @@ bool find_run_command(vector<string> command_vec,string buff_str){
         //fs_create()
     }
     else if(command.compare("L")==0){
-        if(is_mounted&&command_vec.size()==1){
+        if(is_mounted){
             fs_ls();
             return 1;
         }
@@ -505,13 +511,14 @@ void fs_create(string name, int size){
     if(first_available_inode<0){
         fprintf(stderr,"Error: Superblock in disk %s is full, cannot create %s",real_disk_name.c_str(),name.c_str());
     }
+    uint8_t temp127 = 127;
     //now check if name is already in the current directory
     pair<MMAPIterator, MMAPIterator> result = hash_table.equal_range(name);
     for (MMAPIterator it = result.first; it != result.second; it++){
         //std::cout << it->second << std::endl;
         uint8_t hash_value = it->second;
         string hash_key = it->first;
-        if(hash_value==current_working_dir && hash_key.compare(name)==0){
+        if(hash_value==(current_working_dir & temp127) && hash_key.compare(name)==0){
             fprintf(stderr,"Error: File or directory %s already exists",name.c_str());
             return;
         }
@@ -573,12 +580,12 @@ void fs_create(string name, int size){
             bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
         }
         bitset<128> freebits(bit_str);  //update the bits for what is being deleted
-        for(int i=0;i<128;i++){
+        for(int i=1;i<128;i++){
             if(freebits[127-i]==0){
                 num_continuous = num_continuous +1;
                 if(num_continuous == size){
                     for(int j=0;j<size;j++){  //update bits for allocated file size
-                        freebits[(127-i) -j] = 1;
+                        freebits[(127-i) +j] = 1;
                     }
                     block_start_placement = i - size +1;
                     break;
@@ -617,7 +624,7 @@ void fs_create(string name, int size){
         uint8_t temp127 = 127; //01111111 in binary
         uint8_t continuous_block = (uint8_t) num_continuous;
         real_Super_block.inode[first_available_inode].used_size = continuous_block | temp128;
-        real_Super_block.inode[first_available_inode].start_block = block_start_placement;
+        real_Super_block.inode[first_available_inode].start_block = (uint8_t) block_start_placement;
         uint8_t inode_dir_parent = current_working_dir & temp127; //Yxxxxxxx & 01111111
         real_Super_block.inode[first_available_inode].dir_parent = inode_dir_parent;
 
@@ -653,7 +660,7 @@ void fs_create(string name, int size){
         }
         
         temp_buffer[5] = continuous_block | temp128;
-        temp_buffer[6] = block_start_placement;
+        temp_buffer[6] = (uint8_t) block_start_placement;
         temp_buffer[7] = inode_dir_parent;
         streampos inode_disk_position = 16 + first_available_inode*8;
         myFile.seekp(inode_disk_position);
@@ -703,14 +710,17 @@ void fs_delete(std::string name){
         uint8_t hash_value = it->second;
         uint8_t manipulate = 127;  //01111111
         string hash_key = it->first;
-        if((hash_value&manipulate)==(current_working_dir&manipulate) && hash_key.compare(name)==0){
-            for(int j=0;j<126;j++){
-                string str_inode_name;
+        if((hash_value & manipulate)==(current_working_dir & manipulate) && hash_key.compare(name)==0){
+            for(int j=0;j<126;j++){  //here we confirmed its in the current directory
+                string str_inode_name;  //obtain its relevent info
                 for(int k=0;k<5;k++){
                     string s(1,real_Super_block.inode[j].name[k]);
                     str_inode_name = str_inode_name+ s;
                 }
-                if(str_inode_name.compare(hash_key)==0 && hash_value==real_Super_block.inode[j].dir_parent){
+                uint8_t temp_used_size = real_Super_block.inode[j].used_size;
+                bitset<8> btemp(temp_used_size);
+                if(str_inode_name.compare(hash_key)==0 && hash_value==(real_Super_block.inode[j].dir_parent)
+                && btemp[7]==1){
                     file_dir_name = hash_key;
                     file_dir_used_size = real_Super_block.inode[j].used_size;
                     file_dir_start_block = real_Super_block.inode[j].start_block;
@@ -736,7 +746,7 @@ void fs_delete(std::string name){
             bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
         }
         bitset<128> freebits(bit_str);  //update the bits for what is being deleted
-        for(int i=0;i<128;i++){
+        for(int i=1;i<128;i++){//verified
             if((file_dir_start_block)<=i && i <= (file_dir_start_block+(file_dir_used_size&temp127)-1)){
                 freebits[127-i]= 0;
             }
@@ -764,14 +774,14 @@ void fs_delete(std::string name){
         myFile.write (temp_buffer, 16);
         //now update the inode in superblock on disk
         for(int i=0;i<8;i++){
-            temp_buffer[i] = 0;
+            temp_buffer[i] = 0;  //TODO: check this maybe
         }
         streampos disk_inode_position = 16 + inode_index*8;
         myFile.seekp(disk_inode_position);
         myFile.write(temp_buffer,8);
         //now delete block data
         streampos disk_block_position = file_dir_start_block*1024;
-        long total_size_bytes = (file_dir_start_block + (file_dir_used_size&temp127) -1);
+        long total_size_bytes = (file_dir_used_size & temp127)*1024;
         char max_buffer[total_size_bytes];  //worst case, file takes 1024*127=130048 bytes
         for(int i=0;i<total_size_bytes;i++){  //TODO:this loop might not be neccesary. check later
             max_buffer[i] = '\0';
@@ -786,13 +796,22 @@ void fs_delete(std::string name){
         for(int i = 0; i<126;i++){
             uint8_t recurse_parent = real_Super_block.inode[i].dir_parent;
             uint8_t temp127 = 127;
-            if(recurse_parent&temp127 == file_dir_dir_parent&temp127){
+            uint8_t recurse_used_size = real_Super_block.inode[i].dir_parent;
+            uint8_t recurse_start_block = real_Super_block.inode[i].start_block;
+            bitset<8> busedsize(recurse_used_size);
+            if((recurse_parent & temp127) == (file_dir_dir_parent & temp127)&&(busedsize[7]==1)){
                 string temp_name;
                 for(int k=0;k<5;k++){
                     string s(1,real_Super_block.inode[i].name[k]);
                     temp_name = temp_name+ s;
                 }
-                fs_delete(temp_name);  //could be file or directory 
+                if(recurse_start_block==0){
+                current_working_dir = inode_index;  //this needs to be done the not in current directory error
+                fs_delete(temp_name);  //deleting a directory
+                }
+                else{
+                fs_delete(temp_name);  //deleting a file
+                }
             }         
         }
         //begin deleting to structs
@@ -810,7 +829,8 @@ void fs_delete(std::string name){
         }
         streampos disk_inode_position = 16 + inode_index*8;
         myFile.seekp(disk_inode_position);
-        myFile.write(temp_buffer,8);
+        myFile.write(temp_buffer,8);  //TODO: might be error with deleting becuase
+        recurse_flag = 1;//structs are not properly updated after recursion. maybe mount again
         return;
     }
 
@@ -831,7 +851,7 @@ void fs_read(std::string name, int block_num){
         bitset<8> bdirparent(inode_dir_parent);
         if(busedsize[7] == 1 && temp_name.compare(name)==0 && 
         (inode_dir_parent&temp127) == (current_working_dir&temp127) && bdirparent[7]==0){
-            inode_index = i;
+            inode_index = i;//maybe double check if bdirparent[7]=0 is the right thing to do
             break;
         }
     }
@@ -1041,7 +1061,7 @@ void fs_resize(std::string name, int new_size){
         else{  //check if there is any other available space to fit new_size
             int num_consec_blocks = 0;
             int new_block_index = -1;  //potential new starting block 
-            for(int i=126;i>=0;i++){  //look for more contiguous space
+            for(int i=126;i>=0;i--){  //look for more contiguous space
                 if(freebits[i]==0){
                     num_consec_blocks = num_consec_blocks + 1;
                     if(num_consec_blocks == new_size){  //found enough space
@@ -1050,7 +1070,7 @@ void fs_resize(std::string name, int new_size){
                             freebits[127-original_inode_start_block-j]=0;
                         }
                         for(int j=0;j<new_size;j++){  //update free list for the new size
-                            freebits[i-j] = 1;
+                            freebits[i+j] = 1;
                         }
                         break;
                     }
