@@ -1059,7 +1059,7 @@ void fs_resize(std::string name, int new_size){
             return;
         }
         else{  //check if there is any other available space to fit new_size
-            int num_consec_blocks = 0;
+            int num_consec_blocks = 0;  //TODO:: FIX SPECIAL CASE
             int new_block_index = -1;  //potential new starting block 
             for(int i=126;i>=0;i--){  //look for more contiguous space
                 if(freebits[i]==0){
@@ -1118,13 +1118,13 @@ void fs_resize(std::string name, int new_size){
             myFile.seekg(old_disk_data_position);
             myFile.read(tempbuffer2,original_num_blocks*1024);//pass old data into buffer
             myFile.seekp(old_disk_data_position);
-            for(long i=0;i<1024*new_size;i++){//not sure if this is necesary, but just in case
+            for(long i=0;i<(1024*original_num_blocks);i++){//not sure if this is necesary, but just in case
                 tempbuffer3[i] = '\0';
             }
             myFile.write(tempbuffer3,original_num_blocks*1024);//delete data from old location
             streampos new_disk_data_position = new_start_block *1024;
             myFile.seekp(new_disk_data_position);
-            myFile.write(tempbuffer2,1024*new_size);  //write the old data to the new location
+            myFile.write(tempbuffer2,1024*original_num_blocks);  //write the old data to the new location
             return;
         }
         //string free_space_str = freebits.to_string();
@@ -1201,9 +1201,10 @@ void fs_defrag(void){
     }
     bitset<128> freebits(bit_str);
     uint8_t temp127 = 127;
-    for (auto itr = mp.begin(); itr != mp.end(); ++itr) { //move blocks over, one at a time
-        uint8_t inode_start_block =  itr->first;
-        int inode_index =  itr->second;
+    for(map<uint8_t, int>::const_iterator it = mp.begin();  //TODO:: verify this iterates properly
+    it != mp.end(); ++it) { //move blocks over, one at a time
+        uint8_t inode_start_block =  it->first;
+        int inode_index =  it->second;
         int num_blocks = ((real_Super_block.inode[inode_index].used_size) & temp127);
         int new_block_index = -1;  //potential new starting block
         int num_blocks_over = 0; 
@@ -1292,7 +1293,7 @@ void fs_cd(std::string name){
             return;
         }
     }
-    fprintf(stderr,"Error: Directory %s does not exist",name);
+    fprintf(stderr,"Error: Directory %s does not exist",name.c_str());
 }
 
 
