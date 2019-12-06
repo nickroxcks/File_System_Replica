@@ -55,7 +55,7 @@ std::vector<std::string> tokenize(const std::string &str, const char *delim) {
 
 
 /**
- * @brief Make a Super_block
+ * @brief Make a Super_block given an array of bytes
  * 
  * @param block_data - 1024 bytes of the Super_block
  * @return Super_block
@@ -83,13 +83,9 @@ Super_block make_super_block(char block_data[1024] ){
     return temp_block;
 }
 
-bool find_run_command(vector<string> command_vec){
+bool find_run_command(vector<string> command_vec,string buff_str){
     string command = command_vec.at(0);  //the command to be run
     if(command.compare("M")==0){
-        if(command_vec.size()>2 || command_vec.size()==1){
-            fprintf(stderr, "Mount Error: error with number of arguements");
-        }
-
         fs_mount( (char *) command_vec.at(1).c_str() );//convert to cstring
         return 1;
     }
@@ -121,22 +117,85 @@ bool find_run_command(vector<string> command_vec){
             return 1;
         }
         else{
-        fprintf(stderr,"Error: No file system is mounted");
+            fprintf(stderr,"Error: No file system is mounted");
         }
         //let ta know u changed the parameter for this
         //fs_create()
     }
-
+    else if(command.compare("W")==0){
+        if(is_mounted){
+            fs_write(command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            return 1;
+        }
+        else{
+            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("B")==0){
+        if(is_mounted){
+            uint8_t buff[1024];
+            for(int i =0;i<1024;i++){
+                buff[i] = buff_str.at(i);
+            }
+            fs_buff(buff);
+            return 1;
+        }
+        else{
+            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("L")==0){
+        if(is_mounted&&command_vec.size()==1){
+            fs_ls();
+            return 1;
+        }
+        else{
+            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("E")==0){
+        if(is_mounted){
+            fs_resize(command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            return 1;
+        }
+        else{
+            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("O")==0){
+        if(is_mounted&&command_vec.size()==1){
+            fs_defrag();
+            return 1;
+        }
+        else{
+            fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
+    else if(command.compare("Y")==0){
+        if(is_mounted){
+            fs_cd(command_vec.at(1));
+            return 1;
+        }
+        else{
+           fprintf(stderr,"Error: No file system is mounted");
+        }
+        //let ta know u changed the parameter for this
+        //fs_create()
+    }
     return 0;
 }
 void command_handling(string file_in){
-    //cout<<file_in<<endl;
-    /*
-    string command = get_command();
-    if(command.compare("") == 0){
-        continue;
-    }
-     */
+
     int line_num = 0;
     std::ifstream in(file_in.c_str());
     if(!in) {
@@ -144,12 +203,14 @@ void command_handling(string file_in){
         return;
     }
     std::string str;
+    string buff_str;
     while (std::getline(in, str)) {
         // output the line
         //std::cout << str << std::endl;
         line_num = line_num + 1;
+        buff_str = str;  //used in some cases when we care about spaces in commands
         vector<string> command_vec = tokenize(str," ");  //removes space from the current line
-        if(find_run_command(command_vec)){
+        if(find_run_command(command_vec,buff_str)){
             continue;
         }
         else{
@@ -381,16 +442,16 @@ void fs_mount(char *new_disk_name){
         uint8_t inode_dir_parent = temp_block.inode[i].dir_parent;
         uint8_t inode_used_size = temp_block.inode[i].used_size;
         uint8_t manipulate = 127;  //ensure that bitwise operation is happening with 8 bits
-        uint8_t parent_size = inode_dir_parent & manipulate;
+        uint8_t parent_index = inode_dir_parent & manipulate;
         bitset<8> bparent(inode_dir_parent);
         bitset<8> bsetsize(inode_used_size); //most significant bit indicates if it is active
 
-        if(parent_size == 126){
+        if(parent_index == 126){
             fprintf(stderr,"Error: File system in %s is inconsistent (error code: 6)",str_disk_name.c_str());
             return;
         }
-        if(0<=parent_size && parent_size <=125){
-            uint8_t parent_used_size = temp_block.inode[parent_size].used_size;
+        if(0<=parent_index && parent_index <=125){
+            uint8_t parent_used_size = temp_block.inode[parent_index].used_size;
             bitset<8> bparent_used_size(parent_used_size);
             if(bparent_used_size[7]==1 && bparent[7]==1){
                 continue;
@@ -771,17 +832,22 @@ void fs_read(std::string name, int block_num){
         if(busedsize[7] == 1 && temp_name.compare(name)==0 && 
         (inode_dir_parent&temp127) == (current_working_dir&temp127) && bdirparent[7]==0){
             inode_index = i;
+            break;
         }
     }
     if(inode_index<0){
         fprintf(stderr, "Error: File %s does not exist",name.c_str());
         return;
     }
-    int size = (int) real_Super_block.inode[inode_index].used_size;
+    uint8_t inode_used_size = real_Super_block.inode[inode_index].used_size;
+    uint8_t inode_start_block = real_Super_block.inode[inode_index].start_block;
+    inode_used_size = inode_used_size&temp127;
+    int size = (int) inode_used_size;
     if(0<=block_num && block_num<=(size-1)){
         fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
-        long block_position = block_num;
-        streampos disk_block_position = block_position*1024;
+        long block_size = block_num;
+        long block_start = inode_start_block;
+        streampos disk_block_position = (block_start+ block_size - 1)*1024;
         myFile.seekg(disk_block_position);
         myFile.read(buffer,1024);
         return;
@@ -790,6 +856,426 @@ void fs_read(std::string name, int block_num){
        fprintf(stderr, "Error: %s does not have block %d",name.c_str(),block_num);
     }
 }
+void fs_write(std::string name, int block_num){
+    uint8_t temp127 = 127;
+    int inode_index=-1;
+    for(int i=0;i<126;i++){
+        string temp_name;
+        for(int k=0;k<5;k++){
+            string s(1,real_Super_block.inode[i].name[k]);
+            temp_name = temp_name+ s;
+        }
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        bitset<8> busedsize(inode_used_size);
+        bitset<8> bdirparent(inode_dir_parent);
+        if(busedsize[7] == 1 && temp_name.compare(name)==0 && 
+        (inode_dir_parent&temp127) == (current_working_dir&temp127) && bdirparent[7]==0){
+            inode_index = i;
+            break;
+        }
+    }
+    if(inode_index<0){
+        fprintf(stderr, "Error: File %s does not exist",name.c_str());
+        return;
+    }
+    uint8_t inode_used_size = real_Super_block.inode[inode_index].used_size;
+    uint8_t inode_start_block = real_Super_block.inode[inode_index].start_block;
+    inode_used_size = inode_used_size&temp127;
+    int size = (int) inode_used_size;
+    if(0<=block_num && block_num<=(size-1)){
+        fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+        long block_size = block_num;
+        long block_start = inode_start_block;
+        streampos disk_block_position = (block_start+ block_size - 1)*1024;
+        myFile.seekp(disk_block_position);
+        myFile.write(buffer,1024);
+        return;
+    }
+    else{
+       fprintf(stderr, "Error: %s does not have block %d",name.c_str(),block_num);
+    }   
+}
+
+void fs_buff(uint8_t buff[1024]){
+    for(int i =0;i<1024;i++){
+        buffer[i] = 0;
+    }
+    for(int i=0;i<1024;i++){
+        buffer[i] = buff[i];
+    }
+}
+
+void fs_ls(void){
+    uint8_t temp127 = 127;
+    uint8_t current_parent_dir = real_Super_block.inode[(current_working_dir&temp127)].dir_parent;
+    current_parent_dir = current_parent_dir&temp127;  //inode index of parrent directory
+    int num_children_parent = 2;
+    int num_children_current = 2;
+    for(int i=0;i<126;i++){  //find # files/dir in current directory
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        bitset<8> busedsize(inode_used_size);
+        inode_dir_parent = inode_dir_parent&temp127;
+        if((inode_dir_parent == (current_working_dir&temp127))&&(busedsize[7]==1)){
+            num_children_current = num_children_current + 1;
+        }
+    }
+    for(int i=0;i<126;i++){  ////find # files/dir in parent directory
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        bitset<8> busedsize(inode_used_size);
+        inode_dir_parent = inode_dir_parent&temp127;
+        if((inode_dir_parent == (current_parent_dir))&&(busedsize[7]==1)){
+            num_children_parent = num_children_parent + 1;
+        }
+    }
+    printf(". %3d\n", num_children_current);
+    printf(".. %3d\n", num_children_parent);
+    for(int i=0;i<126;i++){  //find the files and directories in current directory
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        bitset<8> busedsize(inode_used_size);
+        inode_dir_parent = inode_dir_parent&temp127;
+        if(inode_dir_parent == (current_working_dir&temp127) && busedsize[7]==1){  //we found something in current dir
+            string inode_name;
+            for(int k=0;k<5;k++){  //grabbing name of the inode
+                string s(1,real_Super_block.inode[i].name[k]);
+                inode_name = inode_name + inode_name;
+            }
+            if(real_Super_block.inode[i].start_block==0){  //we have directory
+                int inode_num_children = 2;
+                for(int j=0;j<126;j++){
+                    if(((real_Super_block.inode[j].dir_parent) & temp127)==i){
+                        inode_num_children = inode_num_children +1;
+                    }
+                }
+                printf("%-5s %3d\n", inode_name.c_str(), inode_num_children);
+            }
+            else{//we have file
+                int size = (int) ((real_Super_block.inode[i].used_size) & temp127);
+                printf("%-5s %3d KB\n", inode_name.c_str(), size);
+            }             
+        }
+    }
+
+}
+
+void fs_resize(std::string name, int new_size){
+    uint8_t temp127 = 127;
+    int inode_index=-1;
+    for(int i=0;i<126;i++){
+        string temp_name;
+        for(int k=0;k<5;k++){
+            string s(1,real_Super_block.inode[i].name[k]);
+            temp_name = temp_name+ s;
+        }
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        bitset<8> busedsize(inode_used_size);
+        bitset<8> bdirparent(inode_dir_parent);
+        if(busedsize[7] == 1 && temp_name.compare(name)==0 && 
+        (inode_dir_parent & temp127) == (current_working_dir & temp127) && bdirparent[7]==0){
+            inode_index = i;
+            break;
+        }
+    }
+    if(inode_index<0){
+        fprintf(stderr, "Error: File %s does not exist",name.c_str());
+        return;
+    }
+    int original_num_blocks = (int) ((real_Super_block.inode[inode_index].used_size) & temp127);
+    if(new_size==original_num_blocks){
+        return;
+    }
+    else if(new_size>original_num_blocks){
+        string bit_str;
+        uint8_t temp127 = 127;
+        uint8_t original_inode_start_block = real_Super_block.inode[inode_index].start_block;
+
+        for(int i=0;i<16;i++){  //make the binary stream of free_block_list
+            bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
+        }
+        bitset<128> freebits(bit_str);
+        int more_available_contiguous = 0;  //remember, with bitsets, msb is indexed the highest
+        for(int i=(127-(original_inode_start_block +original_num_blocks));i>=0;i--){  //look for more contiguous space
+            if(freebits[i]==0){
+                more_available_contiguous = more_available_contiguous +1;
+            }
+            else{
+                break;
+            }
+        }
+        if(more_available_contiguous>=(new_size-original_num_blocks)){  //this means their is indeed more contiguous room
+            for(int i=(127-(original_inode_start_block +original_num_blocks));i>=0;i--){  //update bits in free space list
+                if(freebits[i]==0){
+                    freebits[i]=1;
+                }
+                else{
+                    break;
+                }
+            }
+            string free_space_str = freebits.to_string();
+            //update to structs
+            for(int i=0;i<16;i++){
+                real_Super_block.free_block_list[i] = free_space_str.at(i);
+            }
+            uint8_t updated_size = (((uint8_t) new_size) | 128);
+            real_Super_block.inode[inode_index].used_size = updated_size;
+            //update to disk
+            char temp_buffer[1024];
+            for(int i=0;i<16;i++){
+                temp_buffer[i] = real_Super_block.free_block_list[i];
+            }
+            fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+            streampos free_list_position = 0;
+            myFile.seekp(free_list_position);
+            myFile.write(temp_buffer,16);
+            //now update inode on disk in superblock
+            streampos added_block_position = 16 + inode_index*8 + 5;
+            temp_buffer[0] = updated_size;
+            myFile.seekp(added_block_position);
+            myFile.write(temp_buffer,1);
+            return;
+        }
+        else{  //check if there is any other available space to fit new_size
+            int num_consec_blocks = 0;
+            int new_block_index = -1;  //potential new starting block 
+            for(int i=126;i>=0;i++){  //look for more contiguous space
+                if(freebits[i]==0){
+                    num_consec_blocks = num_consec_blocks + 1;
+                    if(num_consec_blocks == new_size){  //found enough space
+                        new_block_index = 127-i-num_consec_blocks+1;
+                        for(int j=0;j<original_num_blocks;j++){  //zero out old free list bits
+                            freebits[127-original_inode_start_block-j]=0;
+                        }
+                        for(int j=0;j<new_size;j++){  //update free list for the new size
+                            freebits[i-j] = 1;
+                        }
+                        break;
+                    }
+                }
+                else{
+                    num_consec_blocks = 0;
+                    continue;
+                }
+            }
+            if(new_block_index<0){
+                fprintf(stderr, "Error: File %s cannot expand to size %d",name.c_str(),new_size);
+                return;
+            }
+            //if we reach this point, there is room but in another place
+            //we have too: update free list, update inode in superblock, 
+            //copy original data from block, delete this data from disk,
+            //paste data into new block location
+            uint8_t temp128 = 128;
+            string free_space_str = freebits.to_string();
+            //update structs
+            for(int i=0;i<16;i++){
+                real_Super_block.free_block_list[i] = free_space_str.at(i);
+            }
+            uint8_t new_used_size = ((uint8_t) new_size) | temp128;
+            uint8_t new_start_block = (uint8_t) new_block_index;
+            real_Super_block.inode[inode_index].used_size = new_used_size;
+            real_Super_block.inode[inode_index].start_block = new_start_block;
+            //update disk
+            char temp_buffer[1024];
+            for(int i=0;i<16;i++){  //put free list data into the buffer
+                temp_buffer[i] = free_space_str.at(i);
+            }
+            fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+            streampos free_list_position = 0;
+            myFile.seekp(free_list_position);
+            myFile.write(temp_buffer,16);  //write freelist data to disk
+            streampos disk_used_size_position = 16 + inode_index*8 + 5;  //next byte after is start_blocl
+            temp_buffer[0] = new_used_size;
+            temp_buffer[1] = new_start_block;
+            myFile.seekp(disk_used_size_position);
+            myFile.write(temp_buffer,2);  //write the new inode data to superblock
+            char tempbuffer2[original_num_blocks*1024];  //used to copy/paste old data
+            char tempbuffer3[1024*new_size];  //used for deleting
+            streampos old_disk_data_position = original_inode_start_block*1024;
+            myFile.seekg(old_disk_data_position);
+            myFile.read(tempbuffer2,original_num_blocks*1024);//pass old data into buffer
+            myFile.seekp(old_disk_data_position);
+            for(long i=0;i<1024*new_size;i++){//not sure if this is necesary, but just in case
+                tempbuffer3[i] = '\0';
+            }
+            myFile.write(tempbuffer3,original_num_blocks*1024);//delete data from old location
+            streampos new_disk_data_position = new_start_block *1024;
+            myFile.seekp(new_disk_data_position);
+            myFile.write(tempbuffer2,1024*new_size);  //write the old data to the new location
+            return;
+        }
+        //string free_space_str = freebits.to_string();
+    }
+    else if(new_size<original_num_blocks){
+        string bit_str;
+        uint8_t temp127 = 127;
+        uint8_t original_inode_start_block = real_Super_block.inode[inode_index].start_block;
+
+        for(int i=0;i<16;i++){  //make the binary stream of free_block_list
+            bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
+        }
+        bitset<128> freebits(bit_str);
+        //update free list and 0 out bits that are no longer needed
+        //update the used size to the new used size
+        //delete unused data from the blocks
+        for(int i=(127-(original_inode_start_block +original_num_blocks-1));
+        i<(127-(original_inode_start_block+new_size-1));i++){  //update bits in free space list
+            freebits[i] = 0;  
+        }
+        string free_space_str = freebits.to_string();
+        //update structs
+        for(int i=0;i<16;i++){
+            real_Super_block.free_block_list[i] = free_space_str.at(i);
+        }
+        uint8_t temp128 = 128;
+        uint8_t new_used_size = ((uint8_t) new_size) | temp128;
+        real_Super_block.inode[inode_index].used_size = new_used_size;
+        //update disk
+        char temp_buffer[1024];
+        for(int i=0;i<16;i++){  //put free list data into the buffer
+            temp_buffer[i] = free_space_str.at(i);
+        }
+        fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+        streampos free_list_position = 0;
+        myFile.seekp(free_list_position);
+        myFile.write(temp_buffer,16);  //write freelist data to disk
+        temp_buffer[0] = new_used_size;
+        streampos disk_used_size_position = 16 + inode_index*8 + 5;  //next byte after is start_blocl
+        myFile.seekp(disk_used_size_position);
+        myFile.write(temp_buffer,1);//update the used size on disk
+        streampos disk_delete_start = (original_inode_start_block+new_size)*1024;
+        long num_bytes_deleted = original_num_blocks - new_size;
+        char tempbuffer2[num_bytes_deleted];
+        for(long i=0;i<num_bytes_deleted;i++){
+            tempbuffer2[i] = '\0';
+        }
+        myFile.seekp(disk_delete_start);
+        myFile.write(tempbuffer2,num_bytes_deleted);
+        return;
+
+    }
+    else{
+        cout<<"unknown error"<<endl;
+    }
+
+}
+void fs_defrag(void){
+    map<uint8_t, int> mp; 
+  
+    //find order in which to fix inodes
+    for(int i=0;i<126;i++){
+        uint8_t inode_star_block = real_Super_block.inode[i].start_block;
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        bitset<8> bset(inode_used_size);
+        if((inode_star_block!=0)&&(bset[7]==1)){
+            mp.insert({inode_star_block,i});
+        }
+    }
+
+    string bit_str;
+    for(int i=0;i<16;i++){  //make the binary stream of free_block_list
+        bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
+    }
+    bitset<128> freebits(bit_str);
+    uint8_t temp127 = 127;
+    for (auto itr = mp.begin(); itr != mp.end(); ++itr) { //move blocks over, one at a time
+        uint8_t inode_start_block =  itr->first;
+        int inode_index =  itr->second;
+        int num_blocks = ((real_Super_block.inode[inode_index].used_size) & temp127);
+        int new_block_index = -1;  //potential new starting block
+        int num_blocks_over = 0; 
+        for(int i=(127-inode_start_block+1);i<=127;i++){ //update bits in freebits
+            if(freebits[i]==0 && i!=127){
+                num_blocks_over = num_blocks_over + 1;
+            }
+            else{
+                if(num_blocks_over>0){
+                    new_block_index = 127-i+1;
+                    for(int k=0;k<num_blocks_over;k++){
+                        freebits[127-new_block_index-k] = 1;
+                    }
+                    for(int k=127-(inode_start_block+num_blocks-1);
+                    k<127-(new_block_index+num_blocks-1);k++){
+                        freebits[k]=0;
+                    }
+                }
+            }
+        }
+        if(new_block_index>0){
+            //update the new start_block of the inode, copy data from old, put it in new location
+            //update structs
+            real_Super_block.inode[inode_index].start_block = (uint8_t) new_block_index;
+            //update inode on disk
+            uint8_t new_start_block = (uint8_t) new_block_index;
+            char tempbuffer[1024];
+            tempbuffer[0] = new_start_block;
+            fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+            streampos disk_start_block_position= 16 + inode_index*8 + 6;  //next byte after is start_blocl
+            myFile.seekp(disk_start_block_position);
+            myFile.write(tempbuffer,1);  //write new start_block to inode on disk
+
+            char tempbuffer2[num_blocks*1024];  //used to copy/paste old data
+            char tempbuffer3[1024*num_blocks];  //used for deleting
+            for(int i=0;i<(1024*num_blocks);i++){
+                tempbuffer3[i] = '\0';
+            }
+            streampos old_disk_data_position = inode_start_block*1024;
+            myFile.seekg(old_disk_data_position);
+            myFile.read(tempbuffer2,num_blocks*1024);//pass old data into buffer
+            myFile.seekp(old_disk_data_position);
+            myFile.write(tempbuffer3,1024*num_blocks);  //delete the old data
+            streampos new_disk_data_position = new_block_index*1024;
+            myFile.write(tempbuffer2,1024*num_blocks);
+
+        }
+
+    }
+    //finally, update the free list
+    string free_space_str = freebits.to_string();
+    char tempbuffer[16];
+    for(int i=0;i<16;i++){
+        real_Super_block.free_block_list[i] = free_space_str.at(i);
+        tempbuffer[i] = free_space_str.at(i);;
+    }
+    //on disk
+    fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
+    streampos free_list_position = 0;
+    myFile.seekp(free_list_position);
+    myFile.write(tempbuffer,16);  //write freelist data to disk
+}
+void fs_cd(std::string name){
+    if(name.compare(".")==0){
+        return;
+    }
+    uint8_t temp127 = 127;
+    uint8_t current_dir_parent_index = real_Super_block.inode[current_working_dir & temp127].dir_parent;
+    if(name.compare("..")==0){
+        current_working_dir = current_dir_parent_index & temp127;
+        return;
+    }
+    for(int i=0;i<126;i++){
+        string temp_name;
+        for(int k=0;k<5;k++){
+            string s(1,real_Super_block.inode[i].name[k]);
+            temp_name = temp_name+ s;
+        }
+        uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
+        uint8_t inode_used_size = real_Super_block.inode[i].used_size;
+        uint8_t inode_start_block = real_Super_block.inode[i].start_block;
+        bitset<8> busedsize(inode_used_size);  //look for directory inside current directory
+        if(busedsize[7]==1 && (inode_start_block==0) && (temp_name.compare(name)==0)
+        && ((inode_dir_parent&temp127)==(current_working_dir&temp127))){
+            current_working_dir = inode_dir_parent&temp127;
+            return;
+        }
+    }
+    fprintf(stderr,"Error: Directory %s does not exist",name);
+}
+
+
 int main(int argc, char *argv[]) {
 
     
