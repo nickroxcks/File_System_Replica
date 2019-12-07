@@ -30,7 +30,7 @@ uint8_t current_working_dir;  //try to keep MSB to 0
 Super_block real_Super_block;
 uint8_t original_current_dir;
 bool recurse_flag =0;
-
+bool delete_error = 1;
 /**
  * @brief Tokenize a string 
  * 
@@ -38,6 +38,19 @@ bool recurse_flag =0;
  * @param delim - The string containing delimiter character(s)
  * @return std::vector<std::string> - The list of tokenized strings. Can be empty
  */
+//given a string input represented in bits, convert it to ascii
+string convert_to_ascii(string str){
+    stringstream sstream(str);
+    string output;
+    while(sstream.good())
+    {
+        bitset<8> bits;
+        sstream >> bits;
+        char c = char(bits.to_ulong());
+        output += c;
+    }
+    return output;
+}
 std::vector<std::string> tokenize(const std::string &str, const char *delim) {
   char* cstr = new char[str.size() + 1];
   std::strcpy(cstr, str.c_str());
@@ -93,7 +106,10 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("C")==0){
         if(is_mounted){
+            cout<<"about to run create "<< command_vec.at(1)<< 
+            " "<<atoi(command_vec.at(2).c_str())<<endl;
             fs_create( command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            cout<<"ran create succefully"<<endl;
             return 1;
         }
         else{
@@ -105,7 +121,10 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     else if(command.compare("D")==0){
         if(is_mounted){
             original_current_dir = current_working_dir;
+            cout<<"about to run D "<< command_vec.at(1)<<endl;
             fs_delete(command_vec.at(1));
+            fs_mount((char *) real_disk_name.c_str());
+            current_working_dir = original_current_dir;
             if(recurse_flag){
                 current_working_dir = original_current_dir;
             }
@@ -119,6 +138,8 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("R")==0){
         if(is_mounted){
+            cout<<"about to run R" << command_vec.at(1) << " "<<
+            atoi(command_vec.at(2).c_str())<<endl;
             fs_read(command_vec.at(1),atoi(command_vec.at(2).c_str()));
             return 1;
         }
@@ -130,7 +151,11 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("W")==0){
         if(is_mounted){
+            cout<<"about to run write"<<endl;
+            //cout<<"anout to run write"<< command_vec.at(1)<< " "<<
+            //atoi(command_vec.at(2).c_str())<<endl;
             fs_write(command_vec.at(1),atoi(command_vec.at(2).c_str()));
+            cout<<"write was run succefully"<<endl;
             return 1;
         }
         else{
@@ -143,9 +168,14 @@ bool find_run_command(vector<string> command_vec,string buff_str){
         if(is_mounted){
             uint8_t buff[1024];
             for(int i =0;i<1024;i++){
-                buff[i] = buff_str.at(i);
+                 buff[i] = 0;
             }
+            for(int i =2;i<buff_str.size();i++){
+                buff[i-2] = buff_str.at(i);
+            }
+            cout<<"about to run buff"<<endl;
             fs_buff(buff);
+            cout<<"ran buff succefully"<<endl;
             return 1;
         }
         else{
@@ -167,6 +197,8 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("E")==0){
         if(is_mounted){
+            cout<<"about to run E " << command_vec.at(1)<< 
+            " "<<atoi(command_vec.at(2).c_str())<<endl;
             fs_resize(command_vec.at(1),atoi(command_vec.at(2).c_str()));
             return 1;
         }
@@ -178,6 +210,7 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("O")==0){
         if(is_mounted&&command_vec.size()==1){
+            cout<<"about to run O"<<endl;
             fs_defrag();
             return 1;
         }
@@ -189,6 +222,7 @@ bool find_run_command(vector<string> command_vec,string buff_str){
     }
     else if(command.compare("Y")==0){
         if(is_mounted){
+            cout<<"about to run Y"<<endl;
             fs_cd(command_vec.at(1));
             return 1;
         }
@@ -331,6 +365,9 @@ void fs_mount(char *new_disk_name){
     for(int i =0;i<126;i++){
         string str_inode_name;
         for(int k=0;k<5;k++){
+            if(temp_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,temp_block.inode[i].name[k]);
             str_inode_name = str_inode_name+ s;
         }
@@ -451,23 +488,26 @@ void fs_mount(char *new_disk_name){
         uint8_t parent_index = inode_dir_parent & manipulate;
         bitset<8> bparent(inode_dir_parent);
         bitset<8> bsetsize(inode_used_size); //most significant bit indicates if it is active
-
+        if(bsetsize[7]==1){
         if(parent_index == 126){
             fprintf(stderr,"Error: File system in %s is inconsistent (error code: 6)",str_disk_name.c_str());
             return;
         }
         if(0<=parent_index && parent_index <=125){
             uint8_t parent_used_size = temp_block.inode[parent_index].used_size;
+            uint8_t parent_start_block = temp_block.inode[parent_index].start_block;
             bitset<8> bparent_used_size(parent_used_size);
-            if(bparent_used_size[7]==1 && bparent[7]==1){
+            cout<< "parent index: " << temp_block.inode[i].dir_parent;
+            cout<<"is it used: "<< bparent_used_size[7] << " is it directory? "<<parent_start_block<<endl;
+            if(bparent_used_size[7]==1 && parent_start_block==0){
                 continue;
             }
             else{
-                fprintf(stderr,"Error: File system in %s is inconsistent (error code: 6)",str_disk_name.c_str());   
+                fprintf(stderr,"Error: File system in %s is inconsistent (error code: 6)\n",str_disk_name.c_str());   
                 return;          
             }
         }
-
+        }
     }
     
     cout<<"all cases passed"<<endl;
@@ -488,6 +528,9 @@ void fs_create(string name, int size){
     for(int i =0;i<126;i++){
         string str_inode_name;
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             str_inode_name = str_inode_name+ s;
         }
@@ -507,6 +550,7 @@ void fs_create(string name, int size){
         }
 
     }
+    //cout<<"we passed hashing phase"<<endl;
     //check if space in super block
     if(first_available_inode<0){
         fprintf(stderr,"Error: Superblock in disk %s is full, cannot create %s",real_disk_name.c_str(),name.c_str());
@@ -527,9 +571,10 @@ void fs_create(string name, int size){
     if(name.compare(".") == 0 || name.compare("..")==0){
         fprintf(stderr,"Error: File or directory %s already exists",name.c_str());
     }
-
+    cout<<"found its not in current directory"<<endl;
     //determine if file or directory
     if(size==0){//means we have a directory
+        cout<<"we want to create a directory "<<"with the name "<<name<<endl;
         if(name.size()==5){
             for(int i =0;i<5;i++){  //not null terminated
                 real_Super_block.inode[first_available_inode].name[i] = name.at(i);
@@ -569,6 +614,7 @@ void fs_create(string name, int size){
         return;
     }
     else{  //means we have a file
+        cout<<"we want to create a file"<<endl;
         if(size<0){
             fprintf(stderr,"  Error: Cannot allocate %d on %s",size,real_disk_name.c_str());
         }
@@ -579,7 +625,9 @@ void fs_create(string name, int size){
         for(int i=0;i<16;i++){  //make the binary stream of free_block_list
             bit_str+= bitset<8>(real_Super_block.free_block_list[i]).to_string();
         }
+        //cout<<"we made a bit str, now we want to turn it into bit set"<<endl;
         bitset<128> freebits(bit_str);  //update the bits for what is being deleted
+        //cout<<"we made the bitset succefully"<<endl;
         for(int i=1;i<128;i++){
             if(freebits[127-i]==0){
                 num_continuous = num_continuous +1;
@@ -595,12 +643,13 @@ void fs_create(string name, int size){
                 num_continuous = 0;
             }
         }
+        //cout<<"no problem with finding continuous"<<endl;
         if(num_continuous==0){
             fprintf(stderr,"  Error: Cannot allocate %d on %s",size,real_disk_name.c_str());
             return;
         }
-        string free_space_str = freebits.to_string();
-        
+        string free_space_str = convert_to_ascii(freebits.to_string());
+        //cout<<"converted to ascii no problem"<<endl;
         //at this point, we can now safely write to disk
         //first update structs
         if(name.size()==5){
@@ -619,6 +668,7 @@ void fs_create(string name, int size){
                 }
             }
         }
+        //cout<<"updated the name in structs for the inode no problem"<<endl;
         //update all other atributes of file inode
         uint8_t temp128 = 128; //10000000 in binary
         uint8_t temp127 = 127; //01111111 in binary
@@ -632,6 +682,7 @@ void fs_create(string name, int size){
         for(int i=0;i<16;i++){
             real_Super_block.free_block_list[i] = free_space_str.at(i);
         }
+        //cout<<"updated free list and all structs for the inode no problem"<<endl;
 
         //Now write to the actual disk. update free space, and the free inode
         char temp_buffer[1024];
@@ -680,6 +731,9 @@ void fs_delete(std::string name){
     for(int i =0;i<126;i++){
         string str_inode_name;
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             str_inode_name = str_inode_name+ s;
         }
@@ -707,6 +761,7 @@ void fs_delete(std::string name){
     pair<MMAPIterator, MMAPIterator> result = hash_table.equal_range(name);
     for (MMAPIterator it = result.first; it != result.second; it++){
         //std::cout << it->second << std::endl;
+        cout<<"made it here"<<endl;
         uint8_t hash_value = it->second;
         uint8_t manipulate = 127;  //01111111
         string hash_key = it->first;
@@ -714,6 +769,9 @@ void fs_delete(std::string name){
             for(int j=0;j<126;j++){  //here we confirmed its in the current directory
                 string str_inode_name;  //obtain its relevent info
                 for(int k=0;k<5;k++){
+                    if(real_Super_block.inode[j].name[k]=='\0'){
+                        break;
+                    }
                     string s(1,real_Super_block.inode[j].name[k]);
                     str_inode_name = str_inode_name+ s;
                 }
@@ -751,7 +809,7 @@ void fs_delete(std::string name){
                 freebits[127-i]= 0;
             }
         }
-        string free_space_str = freebits.to_string();
+        string free_space_str = convert_to_ascii(freebits.to_string());
         //begin deleting to structs
         for(int i=0;i<5;i++){
             real_Super_block.inode[inode_index].name[i]=='\0';
@@ -802,11 +860,15 @@ void fs_delete(std::string name){
             if((recurse_parent & temp127) == (file_dir_dir_parent & temp127)&&(busedsize[7]==1)){
                 string temp_name;
                 for(int k=0;k<5;k++){
+                    if(real_Super_block.inode[i].name[k]=='\0'){
+                        break;
+                    }
                     string s(1,real_Super_block.inode[i].name[k]);
                     temp_name = temp_name+ s;
                 }
                 if(recurse_start_block==0){
                 current_working_dir = inode_index;  //this needs to be done the not in current directory error
+
                 fs_delete(temp_name);  //deleting a directory
                 }
                 else{
@@ -841,7 +903,11 @@ void fs_read(std::string name, int block_num){
     int inode_index=-1;
     for(int i=0;i<126;i++){
         string temp_name;
+        int compare_size = name.size();
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             temp_name = temp_name+ s;
         }
@@ -867,7 +933,7 @@ void fs_read(std::string name, int block_num){
         fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
         long block_size = block_num;
         long block_start = inode_start_block;
-        streampos disk_block_position = (block_start+ block_size - 1)*1024;
+        streampos disk_block_position = (block_start+ block_size)*1024;
         myFile.seekg(disk_block_position);
         myFile.read(buffer,1024);
         return;
@@ -877,11 +943,17 @@ void fs_read(std::string name, int block_num){
     }
 }
 void fs_write(std::string name, int block_num){
+    cout<<"this file name is "<<name<<endl;
+    cout<<"the block num is " << block_num<<endl;
     uint8_t temp127 = 127;
     int inode_index=-1;
     for(int i=0;i<126;i++){
         string temp_name;
+        int compare_size = name.size();
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             temp_name = temp_name+ s;
         }
@@ -907,7 +979,8 @@ void fs_write(std::string name, int block_num){
         fstream myFile (real_disk_name.c_str(), ios::in | ios::out | ios::binary);
         long block_size = block_num;
         long block_start = inode_start_block;
-        streampos disk_block_position = (block_start+ block_size - 1)*1024;
+        cout<<"the write will start at block "<<block_start<<endl;
+        streampos disk_block_position = (block_start+ block_size)*1024;
         myFile.seekp(disk_block_position);
         myFile.write(buffer,1024);
         return;
@@ -919,7 +992,7 @@ void fs_write(std::string name, int block_num){
 
 void fs_buff(uint8_t buff[1024]){
     for(int i =0;i<1024;i++){
-        buffer[i] = 0;
+        buffer[i] = '\0';
     }
     for(int i=0;i<1024;i++){
         buffer[i] = buff[i];
@@ -927,9 +1000,10 @@ void fs_buff(uint8_t buff[1024]){
 }
 
 void fs_ls(void){
+    cout<<"running ls"<<endl;
     uint8_t temp127 = 127;
-    uint8_t current_parent_dir = real_Super_block.inode[(current_working_dir&temp127)].dir_parent;
-    current_parent_dir = current_parent_dir&temp127;  //inode index of parrent directory
+    uint8_t current_parent_dir_index = real_Super_block.inode[(current_working_dir & temp127)].dir_parent;
+    current_parent_dir_index = current_parent_dir_index & temp127;  //inode index of parrent directory
     int num_children_parent = 2;
     int num_children_current = 2;
     for(int i=0;i<126;i++){  //find # files/dir in current directory
@@ -937,7 +1011,7 @@ void fs_ls(void){
         uint8_t inode_used_size = real_Super_block.inode[i].used_size;
         bitset<8> busedsize(inode_used_size);
         inode_dir_parent = inode_dir_parent&temp127;
-        if((inode_dir_parent == (current_working_dir&temp127))&&(busedsize[7]==1)){
+        if((inode_dir_parent == (current_working_dir & temp127))&&(busedsize[7]==1)){
             num_children_current = num_children_current + 1;
         }
     }
@@ -946,27 +1020,39 @@ void fs_ls(void){
         uint8_t inode_used_size = real_Super_block.inode[i].used_size;
         bitset<8> busedsize(inode_used_size);
         inode_dir_parent = inode_dir_parent&temp127;
-        if((inode_dir_parent == (current_parent_dir))&&(busedsize[7]==1)){
+        if(((inode_dir_parent & temp127) == (current_parent_dir_index & temp127))&&(busedsize[7]==1)){
             num_children_parent = num_children_parent + 1;
         }
     }
-    printf(". %3d\n", num_children_current);
-    printf(".. %3d\n", num_children_parent);
+    if((current_working_dir & temp127 )== temp127){
+        //special case of root directory
+        printf(". %3d\n", num_children_current);
+        printf(".. %3d\n", num_children_current);
+    }
+    else{
+        printf(". %3d\n", num_children_current);
+        printf(".. %3d\n", num_children_parent);
+    }
     for(int i=0;i<126;i++){  //find the files and directories in current directory
         uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
         uint8_t inode_used_size = real_Super_block.inode[i].used_size;
         bitset<8> busedsize(inode_used_size);
         inode_dir_parent = inode_dir_parent&temp127;
-        if(inode_dir_parent == (current_working_dir&temp127) && busedsize[7]==1){  //we found something in current dir
+        if(inode_dir_parent == (current_working_dir & temp127) && busedsize[7]==1){  //we found something in current dir
             string inode_name;
             for(int k=0;k<5;k++){  //grabbing name of the inode
+                if(real_Super_block.inode[i].name[k]=='\0'){
+                    break;
+                }
                 string s(1,real_Super_block.inode[i].name[k]);
-                inode_name = inode_name + inode_name;
+                inode_name = inode_name + s;
             }
             if(real_Super_block.inode[i].start_block==0){  //we have directory
                 int inode_num_children = 2;
                 for(int j=0;j<126;j++){
-                    if(((real_Super_block.inode[j].dir_parent) & temp127)==i){
+                    uint8_t in_in_used_size = real_Super_block.inode[j].used_size;
+                    bitset<8> btemp(in_in_used_size);
+                    if(((real_Super_block.inode[j].dir_parent) & temp127)==i && btemp[7]==1){
                         inode_num_children = inode_num_children +1;
                     }
                 }
@@ -975,6 +1061,7 @@ void fs_ls(void){
             else{//we have file
                 int size = (int) ((real_Super_block.inode[i].used_size) & temp127);
                 printf("%-5s %3d KB\n", inode_name.c_str(), size);
+                //fprintf(stdout, "%s %d\n",inode_name.c_str(),size);
             }             
         }
     }
@@ -986,7 +1073,11 @@ void fs_resize(std::string name, int new_size){
     int inode_index=-1;
     for(int i=0;i<126;i++){
         string temp_name;
+        int compare_size = name.size();
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             temp_name = temp_name+ s;
         }
@@ -1035,7 +1126,7 @@ void fs_resize(std::string name, int new_size){
                     break;
                 }
             }
-            string free_space_str = freebits.to_string();
+            string free_space_str = convert_to_ascii(freebits.to_string());
             //update to structs
             for(int i=0;i<16;i++){
                 real_Super_block.free_block_list[i] = free_space_str.at(i);
@@ -1089,7 +1180,7 @@ void fs_resize(std::string name, int new_size){
             //copy original data from block, delete this data from disk,
             //paste data into new block location
             uint8_t temp128 = 128;
-            string free_space_str = freebits.to_string();
+            string free_space_str = convert_to_ascii(freebits.to_string());
             //update structs
             for(int i=0;i<16;i++){
                 real_Super_block.free_block_list[i] = free_space_str.at(i);
@@ -1145,7 +1236,7 @@ void fs_resize(std::string name, int new_size){
         i<(127-(original_inode_start_block+new_size-1));i++){  //update bits in free space list
             freebits[i] = 0;  
         }
-        string free_space_str = freebits.to_string();
+        string free_space_str = convert_to_ascii(freebits.to_string());
         //update structs
         for(int i=0;i<16;i++){
             real_Super_block.free_block_list[i] = free_space_str.at(i);
@@ -1255,7 +1346,7 @@ void fs_defrag(void){
 
     }
     //finally, update the free list
-    string free_space_str = freebits.to_string();
+    string free_space_str = convert_to_ascii(freebits.to_string());
     char tempbuffer[16];
     for(int i=0;i<16;i++){
         real_Super_block.free_block_list[i] = free_space_str.at(i);
@@ -1274,15 +1365,24 @@ void fs_cd(std::string name){
     uint8_t temp127 = 127;
     uint8_t current_dir_parent_index = real_Super_block.inode[current_working_dir & temp127].dir_parent;
     if(name.compare("..")==0){
+        if(current_working_dir & temp127 == 127){//special root case
+            return;
+        }
         current_working_dir = current_dir_parent_index & temp127;
         return;
     }
     for(int i=0;i<126;i++){
         string temp_name;
+        int compare_size = name.size();
         for(int k=0;k<5;k++){
+            if(real_Super_block.inode[i].name[k]=='\0'){
+                break;
+            }
             string s(1,real_Super_block.inode[i].name[k]);
             temp_name = temp_name+ s;
         }
+        //cout<<"we are in cd looking at the name "<<temp_name<<"TESTING"<<endl;
+        //cout<<"we want to find "<<name<<endl;
         uint8_t inode_dir_parent = real_Super_block.inode[i].dir_parent;
         uint8_t inode_used_size = real_Super_block.inode[i].used_size;
         uint8_t inode_start_block = real_Super_block.inode[i].start_block;
@@ -1297,6 +1397,7 @@ void fs_cd(std::string name){
 }
 
 
+
 int main(int argc, char *argv[]) {
 
     
@@ -1307,6 +1408,57 @@ int main(int argc, char *argv[]) {
     command_handling(file_name);
     
 
+   /*
+    string name = "abd";
+    char temp[5];
+    int str_size = name.size();
+    cout<<str_size<<endl;
+    for(int i =0;i<5;i++){
+        if(i<str_size){
+            temp[i]= name.at(i);
+        }
+        else{
+            temp[i] = '\0';
+        }
+    }
+    cout<<temp[0]<<endl;
+    cout<<temp[1]<<endl;
+    cout<<temp[2]<<endl;
+    cout<<temp[3]<<endl;
+    cout<<temp[4]<<endl;
+    */
+
+    
+   /*
+   string test = "ABCDE";
+   string bit_str;
+    for(int i=0;i<5;i++){  //make the binary stream of free_block_list
+        bit_str+= bitset<8>(test.at(i)).to_string();
+        }
+        //char(c.to_ulong())
+    bitset<40> freebits(bit_str);
+    freebits[39]=0;
+    freebits[38]=0;
+    freebits[37]=0;
+    freebits[36]=0;
+    freebits[35]=0;
+    freebits[34]=0;
+    freebits[33]=0;
+    freebits[32]=0;
+    string free_space_str = convert_to_ascii(freebits.to_string());
+    char idk[5];
+    for(int i=0;i<5;i++){
+        idk[i] = free_space_str.at(i);
+    }
+    streampos wtf = 0;
+    fstream myFile ("new_write_file", ios::in | ios::out | ios::binary);
+    myFile.seekp (wtf);
+    myFile.write (idk, 5);
+    myFile.seekg(wtf);
+    myFile.read(idk,1);
+    bitset<8> test4(idk[1]);
+    cout<<test4<<endl;
+    */
    /*
    //THE GOLDEN CODE
    char idk[1024];
